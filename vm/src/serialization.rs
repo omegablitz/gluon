@@ -78,7 +78,7 @@ impl SeSeed {
         }
     }
 
-    pub fn weak(&self) -> Weak<RwLock<(HashMap<usize, crate::base::serialization::Id>, crate::base::serialization::Id)>> {
+    pub fn weak(&self) -> Weak<RwLock<(HashMap<usize, crate::base::serialization::Id>, Vec<crate::base::serialization::Id>)>> {
         Arc::downgrade(&self.node_to_id.node_to_id)
     }
 }
@@ -543,10 +543,9 @@ impl SerializeState<SeSeed> for ClosureData {
         }
         {
             let mut node_to_id = seed.node_to_id.node_to_id.write().unwrap();
-            let len = node_to_id.1;
-            node_to_id.1 += 1;
-            serializer.serialize_element(&GraphVariant::Marked(len))?;
-            node_to_id.0.insert(self_id, len);
+            let new_id = node_to_id.1.pop().unwrap_or_else(|| node_to_id.0.len() as crate::base::serialization::Id);
+            serializer.serialize_element(&GraphVariant::Marked(new_id))?;
+            node_to_id.0.insert(self_id, new_id);
         }
         serializer.serialize_element(&Seeded::new(seed, &self.function))?;
         serializer.serialize_element(&self.upvars.len())?;

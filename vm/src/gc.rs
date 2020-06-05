@@ -207,7 +207,7 @@ impl Generation {
 
 #[derive(Clone, Debug)]
 struct Watcher {
-    elem: Weak<RwLock<(HashMap<usize, crate::base::serialization::Id>, crate::base::serialization::Id)>>,
+    elem: Weak<RwLock<(HashMap<usize, crate::base::serialization::Id>, Vec<crate::base::serialization::Id>)>>,
     next: Option<Box<Watcher>>,
 }
 
@@ -1367,7 +1367,7 @@ impl Gc {
                             let mut map = arc.write().unwrap();
                             for addr in &free_addrs {
                                 if let Some(id) = map.0.remove(&(*addr as usize)) {
-                                    println!("removed stale addr: {:?}, id: {}", addr, id);
+                                    map.1.push(id);
                                 }
                             }
                         }

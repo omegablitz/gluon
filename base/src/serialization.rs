@@ -285,7 +285,7 @@ pub trait Shared {
     fn as_ptr(&self) -> *const ();
 }
 
-pub type NodeToId = Arc<RwLock<(HashMap<usize, Id>, Id)>>;
+pub type NodeToId = Arc<RwLock<(HashMap<usize, Id>, Vec<Id>)>>;
 
 enum Lookup {
     Unique,
@@ -304,8 +304,7 @@ where
     if let Some(id) = map.0.get(&(node.as_ptr() as usize)) {
         return Lookup::Found(*id);
     }
-    let id = map.1;
-    map.1 += 1;
+    let id = map.1.pop().unwrap_or_else(|| map.0.len() as Id);
     map.0.insert(node.as_ptr() as usize, id);
     Lookup::Inserted(id)
 }
