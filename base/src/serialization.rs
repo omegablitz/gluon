@@ -1,12 +1,11 @@
 extern crate anymap;
 
 use std::any::Any;
-use std::cell::RefCell;
 use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::ops::Deref;
-use std::rc::Rc;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
+
 
 use crate::serde::de::{DeserializeSeed, DeserializeState, Deserializer, Error};
 use crate::serde::ser::{SerializeState, Serializer};
@@ -154,11 +153,11 @@ pub type Id = u32;
 type IdToShared<T> = HashMap<Id, T>;
 
 #[derive(Clone)]
-pub struct NodeMap(Rc<RefCell<anymap::Map>>);
+pub struct NodeMap(Arc<RwLock<anymap::Map>>);
 
 impl Default for NodeMap {
     fn default() -> Self {
-        NodeMap(Rc::new(RefCell::new(anymap::Map::new())))
+        NodeMap(Arc::new(RwLock::new(anymap::Map::new())))
     }
 }
 
@@ -174,7 +173,8 @@ impl NodeMap {
         T: Any,
     {
         self.0
-            .borrow_mut()
+            .write()
+            .unwrap()
             .entry::<IdToShared<T>>()
             .or_insert(IdToShared::new())
             .insert(id, value);
@@ -193,7 +193,8 @@ impl NodeMap {
         F: FnOnce(&T) -> T,
     {
         self.0
-            .borrow()
+            .read()
+            .unwrap()
             .get::<IdToShared<T>>()
             .and_then(|map| map.get(&id).map(clone))
     }
@@ -284,7 +285,7 @@ pub trait Shared {
     fn as_ptr(&self) -> *const ();
 }
 
-pub type NodeToId = Rc<RefCell<HashMap<*const (), Id>>>;
+pub type NodeToId = Arc<RwLock<(HashMap<usize, Id>, Id)>>;
 
 enum Lookup {
     Unique,
@@ -299,12 +300,13 @@ where
     if Shared::unique(node) {
         return Lookup::Unique;
     }
-    let mut map = map.borrow_mut();
-    if let Some(id) = map.get(&node.as_ptr()) {
+    let mut map = map.write().unwrap();
+    if let Some(id) = map.0.get(&(node.as_ptr() as usize)) {
         return Lookup::Found(*id);
     }
-    let id = map.len() as Id;
-    map.insert(node.as_ptr(), id);
+    let id = map.1;
+    map.1 += 1;
+    map.0.insert(node.as_ptr() as usize, id);
     Lookup::Inserted(id)
 }
 

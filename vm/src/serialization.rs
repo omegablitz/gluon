@@ -1,4 +1,4 @@
-use std::{borrow::Cow, cell::RefCell, marker::PhantomData, rc::Rc, sync::Arc};
+use std::{borrow::Cow, cell::RefCell, collections::HashMap, marker::PhantomData, rc::Rc, sync::{Arc, RwLock, Weak}};
 
 use itertools::Itertools;
 
@@ -76,6 +76,10 @@ impl SeSeed {
         SeSeed {
             node_to_id: Default::default(),
         }
+    }
+
+    pub fn weak(&self) -> Weak<RwLock<(HashMap<usize, crate::base::serialization::Id>, crate::base::serialization::Id)>> {
+        Arc::downgrade(&self.node_to_id.node_to_id)
     }
 }
 
@@ -532,16 +536,17 @@ impl SerializeState<SeSeed> for ClosureData {
         S: Serializer,
     {
         let mut serializer = serializer.serialize_seq(Some(3 + self.upvars.len()))?;
-        let self_id = self as *const _ as *const ();
-        if let Some(&id) = seed.node_to_id.node_to_id.borrow().get(&self_id) {
+        let self_id = self as *const _ as usize;
+        if let Some(&id) = seed.node_to_id.node_to_id.read().unwrap().0.get(&self_id) {
             serializer.serialize_element(&GraphVariant::Reference(id))?;
             return serializer.end();
         }
         {
-            let mut node_to_id = seed.node_to_id.node_to_id.borrow_mut();
-            let len = node_to_id.len() as crate::base::serialization::Id;
+            let mut node_to_id = seed.node_to_id.node_to_id.write().unwrap();
+            let len = node_to_id.1;
+            node_to_id.1 += 1;
             serializer.serialize_element(&GraphVariant::Marked(len))?;
-            node_to_id.insert(self_id, len);
+            node_to_id.0.insert(self_id, len);
         }
         serializer.serialize_element(&Seeded::new(seed, &self.function))?;
         serializer.serialize_element(&self.upvars.len())?;
