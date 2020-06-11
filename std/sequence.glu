@@ -1,0 +1,100 @@
+//! Fast persistent sequences.
+
+let prelude @ { Ordering, ? } = import! std.prelude
+let { Semigroup, Monoid, Eq, Show } = prelude
+let { Functor, Applicative, Alternative, Monad } = prelude
+let { Foldable } = import! std.foldable
+let { Traversable } = import! std.traversable
+let { Bool } = import! std.bool
+let array @ { ? } = import! std.array
+let { (<>) } = import! std.semigroup
+let { compare } = import! std.cmp
+
+let { map } = import! std.functor
+let { (<*>), wrap } = import! std.applicative
+let { (<|>) } = import! std.alternative
+
+/// A persistent sequence type. Implemented with 2-3 finger trees.
+///
+/// ```
+/// let list @ { List, ? } = import! std.list
+/// let { assert_neq } = import! std.test
+///
+/// assert_neq (Cons 1 Nil) Nil
+/// ```
+
+type Digit a =
+    | One a
+    | Two a a
+    | Three a a a
+    | Four a a a a
+
+type Node a =
+    | Node2 a a
+    | Node3 a a a
+
+type FingerTree a =
+    | Empty
+    | Single a
+    | Deep (Digit a) (FingerTree (Node a)) (Digit a)
+
+#[infix(right, 5)]
+rec
+let (<|) x ys : a -> FingerTree a -> FingerTree a =
+    match ys with
+    | Empty -> Single x
+    | Single y -> Deep (One x) Empty (One y)
+    | Deep (One a) deeper suffix -> Deep (Two x a) deeper suffix
+    | Deep (Two a b) deeper suffix -> Deep (Three x a b) deeper suffix
+    | Deep (Three a b c) deeper suffix -> Deep (Four x a b c) deeper suffix
+    | Deep (Four a b c d) deeper suffix -> Deep (Two x a) (Node3 b c d <| deeper) suffix
+in
+
+#[infix(left, 5)]
+rec
+let (|>) xs y : FingerTree a -> a -> FingerTree a =
+    match xs with
+    | Empty -> Single y
+    | Single x -> Deep (One x) Empty (One y)
+    | Deep prefix deeper (One a) -> Deep prefix deeper (Two a y)
+    | Deep prefix deeper (Two a b) -> Deep prefix deeper (Three a b y)
+    | Deep prefix deeper (Three a b c) -> Deep prefix deeper (Four a b c y)
+    | Deep prefix deeper (Four a b c d) -> Deep prefix (deeper |> Node3 a b c) (Two d y)
+in
+
+type View a =
+    | Nil
+    | View a (FingerTree a)
+
+rec
+let viewl xs : FingerTree a -> View a =
+    match xs with
+    | Empty -> Nil
+    | Single x -> View x Empty
+    | Deep (One a) deeper suffix ->
+        match viewl deeper with
+        | View (Node2 b c) rest -> View a (Deep (Two b c) rest suffix)
+        | View (Node3 b c d) rest -> View a (Deep (Three b c d) rest suffix)
+        | Nil ->
+            match suffix with
+            | One w -> View a (Single w)
+            | Two w x -> View a (Deep (One w) Empty (One x))
+            | Three w x y -> View a (Deep (Two w x) Empty (One y))
+            | Four w x y z -> View a (Deep (Three w x y) Empty (One z))
+    | Deep (Two a b) deeper suffix -> View a (Deep (One b) deeper suffix)
+    | Deep (Three a b c) deeper suffix -> View a (Deep (Two b c) deeper suffix)
+    | Deep (Four a b c d) deeper suffix -> View a (Deep (Three b c d) deeper suffix)
+in
+
+
+
+//0 <| 1 <| 2 <| 3 <| 4 <| 5 <| Empty
+//Empty |> 0 |> 1 |> 2 |> 3 |> 4 |> 5
+
+5
+
+
+
+
+
+
