@@ -1551,7 +1551,7 @@ where
         D: crate::serde::de::Deserializer<'de>,
     {
         use crate::serialization::SharedSeed;
-        let seed = SharedSeed::new(seed);
+        let seed: SharedSeed<Type<_>, _> = SharedSeed::new(seed);
         crate::serde::de::DeserializeSeed::deserialize(seed, deserializer).map(ArcType::new)
     }
 }

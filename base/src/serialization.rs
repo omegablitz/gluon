@@ -152,12 +152,14 @@ impl Shared for Symbol {
 pub type Id = u32;
 type IdToShared<T> = HashMap<Id, T>;
 
-#[derive(Clone)]
-pub struct NodeMap(Arc<RwLock<anymap::Map>>);
+#[derive(Debug, Clone)]
+pub struct NodeMap(pub Arc<RwLock<(anymap::Map, HashMap<*const (), Id>, HashMap<Id, *const ()>)>>);
+unsafe impl Send for NodeMap {}
+unsafe impl Sync for NodeMap {}
 
 impl Default for NodeMap {
     fn default() -> Self {
-        NodeMap(Arc::new(RwLock::new(anymap::Map::new())))
+        NodeMap(Arc::new(RwLock::new((anymap::Map::new(), HashMap::new(), HashMap::new()))))
     }
 }
 
@@ -168,16 +170,41 @@ impl AsMut<NodeMap> for NodeMap {
 }
 
 impl NodeMap {
-    pub fn insert<T>(&self, id: Id, value: T)
+    pub fn insert<T>(&self, id: Id, value: Type<T>)
     where
-        T: Any,
+        T: Any + Clone,
     {
         self.0
             .write()
             .unwrap()
+            .0
+            .entry::<IdToShared<Type<T>>>()
+            .or_insert(IdToShared::new())
+            .insert(id, value);
+    }
+
+    pub fn insert_w_ptr<T, U>(&self, id: Id, value: T)
+    where
+        T: Any + Deref<Target = U>,
+        U: ?Sized,
+    {
+        let mut lock = self.0
+            .write()
+            .unwrap();
+
+        let ptr = &*value as *const U as *const ();
+
+        lock.0
             .entry::<IdToShared<T>>()
             .or_insert(IdToShared::new())
             .insert(id, value);
+
+        lock.1.insert(ptr, id);
+
+        if let Some(stale_ptr) = lock.2.remove(&id) {
+            lock.1.remove(&stale_ptr).unwrap();
+        }
+        lock.2.insert(id, ptr);
     }
 
     pub fn get<T>(&self, id: Id) -> Option<T>
@@ -195,6 +222,7 @@ impl NodeMap {
         self.0
             .read()
             .unwrap()
+            .0
             .get::<IdToShared<T>>()
             .and_then(|map| map.get(&id).map(clone))
     }
@@ -254,11 +282,38 @@ pub enum Variant<T> {
     Reference(Id),
 }
 
-impl<'de, 'seed, T, S> DeserializeSeed<'de> for SharedSeed<'seed, T, S>
+impl<'de, 'seed, T, S> DeserializeSeed<'de> for SharedSeed<'seed, Type<T>, S>
+where
+    Type<T>: DeserializeState<'de, S>,
+    S: AsMut<NodeMap>,
+    T: Any + Clone,
+{
+    type Value = Type<T>;
+
+    fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        match Variant::<Type<T>>::deserialize_state(self.seed, deserializer)? {
+            Variant::Marked(id, node) => {
+                self.seed.as_mut().insert(id, (self.cloner)(&node));
+                Ok(node)
+            }
+            Variant::Plain(value) => Ok(value),
+            Variant::Reference(id) => match self.seed.as_mut().get_with(id, self.cloner) {
+                Some(rc) => Ok(rc),
+                None => Err(D::Error::custom(format_args!("missing id {}", id))),
+            },
+        }
+    }
+}
+
+impl<'de, 'seed, T, S, U> DeserializeSeed<'de> for SharedSeed<'seed, T, S>
 where
     T: DeserializeState<'de, S>,
     S: AsMut<NodeMap>,
-    T: Any,
+    T: Any + Deref<Target = U>,
+    U: ?Sized,
 {
     type Value = T;
 
@@ -268,7 +323,7 @@ where
     {
         match Variant::<T>::deserialize_state(self.seed, deserializer)? {
             Variant::Marked(id, node) => {
-                self.seed.as_mut().insert(id, (self.cloner)(&node));
+                self.seed.as_mut().insert_w_ptr(id, (self.cloner)(&node));
                 Ok(node)
             }
             Variant::Plain(value) => Ok(value),
@@ -383,7 +438,7 @@ pub mod shared {
         D: Deserializer<'de>,
         T: DeserializeState<'de, S>,
         S: AsMut<NodeMap>,
-        T: Any + Clone,
+        T: Any + Deref + Clone,
     {
         SharedSeed::new(seed).deserialize(deserializer)
     }

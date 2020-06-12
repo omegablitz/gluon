@@ -27,6 +27,23 @@ use crate::{
     Variants,
 };
 
+#[derive(Clone)]
+pub struct UnsafeDeSeed {
+    symbols: Rc<RefCell<Symbols>>,
+    pub gc_map: NodeMap,
+    base_seed: crate::base::serialization::Seed<Symbol, ArcType<Symbol>>,
+}
+
+impl<'de> UnsafeDeSeed {
+    pub fn new() -> UnsafeDeSeed {
+        UnsafeDeSeed {
+            symbols: Default::default(),
+            gc_map: NodeMap::default(),
+            base_seed: Default::default(),
+        }
+    }
+}
+
 pub struct DeSeed<'gc> {
     pub thread: RootedThread,
     context: ExecuteContext<'gc, 'gc, State>,
@@ -42,6 +59,16 @@ impl<'de, 'gc> DeSeed<'gc> {
             symbols: Default::default(),
             gc_map: NodeMap::default(),
             base_seed: Default::default(),
+            context: context.context(),
+        }
+    }
+
+    pub fn unsaf(seed: UnsafeDeSeed, thread: &Thread, context: &'gc mut ActiveThread) -> DeSeed<'gc> {
+        DeSeed {
+            thread: thread.root_thread(),
+            symbols: seed.symbols,
+            gc_map: seed.gc_map,
+            base_seed: seed.base_seed,
             context: context.context(),
         }
     }
@@ -304,11 +331,15 @@ pub mod gc {
             // FIXME
             unsafe {
                 Ok(Cow::<str>::deserialize(deserializer).and_then(|s| {
-                    seed.context
+                    let out = seed.context
                         .gc
                         .alloc(&s[..])
                         .map(|v| v.unrooted())
-                        .map_err(D::Error::custom)
+                        .map_err(D::Error::custom);
+                    if let Ok(ref ptr) = out {
+                        seed.gc_map.0.write().unwrap().1.insert(&**ptr as *const crate::value::ValueStr as *const (), 999999999 as crate::base::serialization::Id);
+                    }
+                    out
                 })?)
             }
         }
@@ -613,7 +644,7 @@ pub mod closure {
                                         })
                                         .map_err(V::Error::custom)?
                                         .unrooted();
-                                    self.state.gc_map.insert(id, closure.clone_unrooted());
+                                    self.state.gc_map.insert_w_ptr(id, closure.clone_unrooted());
 
                                     for i in 0..upvars {
                                         let value = seq
